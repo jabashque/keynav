@@ -78,6 +78,7 @@ typedef struct wininfo {
   int border_thickness;
   int center_cut_size;
   int curviewport;
+  int grid_update;
 } wininfo_t;
 
 typedef struct viewport {
@@ -125,6 +126,7 @@ static char drag_modkeys[128];
 #define WININFO_MAXHIST (100)
 static wininfo_t wininfo_history[WININFO_MAXHIST]; /* XXX: is 100 enough? */
 static int wininfo_history_cursor = 0;
+static int wininfo_undo_history_cursor = 0;
 
 void defaults();
 
@@ -164,7 +166,7 @@ void handle_commands(char *commands);
 void parse_config();
 int parse_config_line(char *line);
 void save_history_point();
-void restore_history_point(int moves_ago);
+void restore_history_point();
 void cell_select(int x, int y);
 handler_info_t handle_recording(XKeyEvent *e);
 handler_info_t handle_gridnav(XKeyEvent *e);
@@ -923,6 +925,7 @@ void cmd_start(char *args) {
   wininfo.y = viewports[wininfo.curviewport].y;
   wininfo.w = viewports[wininfo.curviewport].w;
   wininfo.h = viewports[wininfo.curviewport].h;
+  wininfo.grid_update = 1;
 
   grab_keyboard();
 
@@ -1026,7 +1029,7 @@ void cmd_history_back(char *args) {
   if (!ISACTIVE)
     return;
 
-  restore_history_point(1);
+  restore_history_point();
 }
 
 void cmd_loadconfig(char *args) {
@@ -1070,6 +1073,7 @@ void cmd_cut_up(char *args) {
   if (!ISACTIVE)
     return;
   wininfo.h = percent_of(wininfo.h, args, .5);
+  wininfo.grid_update = 1;
 }
 
 void cmd_cut_down(char *args) {
@@ -1079,12 +1083,14 @@ void cmd_cut_down(char *args) {
   int orig = wininfo.h;
   wininfo.h = percent_of(wininfo.h, args, .5);
   wininfo.y += orig - wininfo.h;
+  wininfo.grid_update = 1;
 }
 
 void cmd_cut_left(char *args) {
   if (!ISACTIVE)
     return;
   wininfo.w = percent_of(wininfo.w, args, .5);
+  wininfo.grid_update = 1;
 }
 
 void cmd_cut_right(char *args) {
@@ -1093,30 +1099,35 @@ void cmd_cut_right(char *args) {
     return;
   wininfo.w = percent_of(wininfo.w, args, .5);
   wininfo.x += orig - wininfo.w;
+  wininfo.grid_update = 1;
 }
 
 void cmd_move_up(char *args) {
   if (!ISACTIVE)
     return;
   wininfo.y -= percent_of(wininfo.h, args, 1);
+  wininfo.grid_update = 1;
 }
 
 void cmd_move_down(char *args) {
   if (!ISACTIVE)
     return;
   wininfo.y += percent_of(wininfo.h, args, 1);
+  wininfo.grid_update = 1;
 }
 
 void cmd_move_left(char *args) {
   if (!ISACTIVE)
     return;
   wininfo.x -= percent_of(wininfo.w, args, 1);
+  wininfo.grid_update = 1;
 }
 
 void cmd_move_right(char *args) {
   if (!ISACTIVE)
     return;
   wininfo.x += percent_of(wininfo.w, args, 1);
+  wininfo.grid_update = 1;
 }
 
 void cmd_cursorzoom(char *args) {
@@ -1140,6 +1151,7 @@ void cmd_cursorzoom(char *args) {
   wininfo.y = yloc - (height / 2);
   wininfo.w = width;
   wininfo.h = height;
+  wininfo.grid_update = 1;
 }
 
 void cmd_windowzoom(char *args) {
@@ -1160,6 +1172,7 @@ void cmd_windowzoom(char *args) {
     wininfo.y = y;
     wininfo.w = width;
     wininfo.h = height;
+    wininfo.grid_update = 1;
   }
 }
 
@@ -1317,6 +1330,7 @@ void cmd_cell_select(char *args) {
   // else, then we said cell-select NxM
   // cell_selection is 0-based, so subtract 1.
   cell_select(col - 1, row - 1);
+  wininfo.grid_update = 1;
 }
 
 void cell_select(int col, int row) {
@@ -1652,6 +1666,7 @@ void handle_commands(char *commands) {
   //printf("Commands; %s\n", commands);
   cmdcopy = strdup(commands);
   copyptr = cmdcopy;
+  wininfo.grid_update = 0;
   while (*copyptr != '\0') {
     /* Parse with knowledge of quotes and escaping */
     is_quoted = is_escaped = FALSE;
@@ -1753,19 +1768,32 @@ void save_history_point() {
          &(wininfo),
          sizeof(wininfo));
 
+  /* Update undo history cursor if the current wininfo was set due to a
+   * grid update */
+  if (wininfo.grid_update == 1)
+    wininfo_undo_history_cursor = wininfo_history_cursor;
+
   wininfo_history_cursor++;
 }
 
-void restore_history_point(int moves_ago) {
-  wininfo_history_cursor -= moves_ago + 1;
-  if (wininfo_history_cursor < 0) {
-    wininfo_history_cursor = 0;
+void restore_history_point() {
+  wininfo_undo_history_cursor -= 1;
+  if (wininfo_undo_history_cursor < 0) {
+    wininfo_undo_history_cursor = 0;
   }
 
-  wininfo_t *previous = &(wininfo_history[wininfo_history_cursor]);
+  while (wininfo_undo_history_cursor > 0) {
+    if (wininfo_history[wininfo_undo_history_cursor].grid_update == 1)
+      break;
+    wininfo_undo_history_cursor--;
+  }
+  wininfo_t *previous = &(wininfo_history[wininfo_undo_history_cursor]);
   memcpy(&wininfo, previous, sizeof(wininfo));
   appstate.need_draw = 1;
   appstate.need_moveresize = 1;
+  /* Update the normal history cursor to match what the undo history cursor
+   * is currently pointing to */
+  wininfo_history_cursor = wininfo_undo_history_cursor;
 }
 
 /* Sort viewports, left to right.
