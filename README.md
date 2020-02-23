@@ -1,6 +1,8 @@
 keynav
 ======
 
+!!! WARNING: This branch will receive force-pushes! It is recommended that you track/rebase on `master` and only cherrypick commits from this branch.
+
 Control the mouse with the keyboard.
 
 Please see http://www.semicomplete.com/projects/keynav
